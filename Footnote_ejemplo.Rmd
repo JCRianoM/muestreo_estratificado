@@ -1,0 +1,103 @@
+
+---
+title: "Taller Final: muestreo estadístico"
+subtitle: "Muestreo aleatorio estratificado"
+author: "Julián Camilo Riaño Moreno"
+date: "`r format(Sys.Date(), '%A, %B %d, %Y')`"
+output:
+  pdf_document: 
+    keep_tex: yes
+    toc: yes
+  keep_tex: yes
+  word_document: default
+  html_document: 
+    keep_md: true
+    toc: yes
+    toc_float: true
+    code_folding: hide
+  fig_cap: yes
+header-includes:
+- \usepackage{float}
+- \floatplacement{figure}{H}
+---
+
+```{r setup, include=FALSE}
+# define knitr options
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(echo = TRUE, fig.pos= "h")
+```
+
+```{r, include=FALSE}
+# instalar paquetes. 
+library(dplyr)
+library(tidyverse)
+library(gridExtra)
+library(kableExtra)
+library(knitr)
+library(pander) ##paquete para tablas pandoc
+```
+
+
+```{r carga de datos y construcción de datos para ejercicio, include = FALSE}
+wine <- read.csv2('winequality-white.csv')
+wine <- data.frame(apply(wine, 2, as.numeric))
+
+N <- 4897
+np <- round(0.05*N,0)
+n1<-np/3
+
+###https://drinkriesling.com/tasteprofile/thescale###
+wine_sweet <- wine %>% mutate (rieseling_s= residual.sugar/(fixed.acidity+citric.acid+volatile.acidity))
+###se definen categorías, se elmina el dulce porque es un outsider (residual.sugar 65)###
+wine_sweet <- wine_sweet %>% mutate(sweet_c = 
+                                        case_when(rieseling_s < 1 ~ 'dry', 
+                                                  rieseling_s < 2.1 ~ 'medium_dry',
+                                                  rieseling_s <= 4 ~ 'medium_sweet')) %>% na.omit()
+wine_sweet$sweet_c <- as.factor(wine_sweet$sweet_c)
+
+
+x <- wine_sweet %>% group_by(sweet_c) %>%
+    sample_n(n1, replace = FALSE)
+
+#xt <- x %>% summarise_at(.vars = names(.)[1:12],.funs = c(mean)) %>%
+    #gather(Variable, valname, -sweet_c) %>% spread(sweet_c, valname)
+
+nom_sweet <- c('Seco', 'Semi_seco', 'Semi_dulce')
+x_mean <- x %>% summarise_at(.vars = names(.)[1:13],.funs = c(mean))
+x_mean <- as.data.frame(t(x_mean[, -1]))
+colnames(x_mean) <- nom_sweet
+
+x_sd <- x %>% summarise_at(.vars = names(.)[1:13],.funs = c(sd))
+x_sd <- as.data.frame(t(x_sd[, -1]))
+colnames(x_sd) <- nom_sweet
+
+coef_var <- x_sd/x_mean
+
+table_est <- cbind(x_mean, x_sd, coef_var)
+```
+
+```{r gráfica prueba, echo=FALSE, message=FALSE, results='asis'}
+knitr::kable(table_est, booktabs = TRUE,  
+             caption = "Estimadores de la muestra piloto", 
+             digits = 3) %>%
+    kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 7) %>%
+    add_header_above(c("", "Media" = 3, 
+                       "Desviacion estandar" = 3, 
+                       "Coeficiente de variación" = 3), 
+                     escape = FALSE) %>%
+          footnote(
+        general = "Here is a general comments of the table. ",
+        number = c("$y = a+b;$", "$e = mc^2;$"), # math
+        alphabet = c("Footnote A; ", "Footnote B; "),
+        symbol = c("Footnote Symbol 1; ", "Footnote Symbol 2"),
+        general_title = "General: ", number_title = "Type I: ",
+        alphabet_title = "Type II: ", symbol_title = "Type III: ",
+         footnote_as_chunk = T,  escape=F     )
+
+```
+

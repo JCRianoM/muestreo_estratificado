@@ -1,0 +1,667 @@
+
+---
+title: "Taller Final: muestreo estadístico"
+subtitle: "Muestreo aleatorio estratificado"
+author: "Julián Camilo Riaño Moreno"
+date: "`r format(Sys.Date(), '%A, %B %d, %Y')`"
+output:
+  pdf_document: 
+    keep_tex: yes
+    toc: yes
+  keep_tex: yes
+  word_document: default
+  html_document: 
+    keep_md: true
+    toc: yes
+    toc_float: true
+    code_folding: hide
+  fig_cap: yes
+header-includes:
+- \usepackage{float}
+- \floatplacement{figure}{H}
+- \usepackage{booktabs}
+---
+
+```{r setup, include=FALSE}
+# define knitr options
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(echo = TRUE, fig.pos= "h")
+```
+
+```{r, include=FALSE}
+# instalar paquetes. 
+library(dplyr)
+library(tidyverse)
+library(gridExtra)
+library(kableExtra)
+library(knitr)
+library(pander) ##paquete para tablas pandoc
+library(sampling)
+library(purrr)
+library(ggplot2)
+library(sampling)
+library(reshape)
+library(readr)
+```
+
+
+```{r carga de datos y construcción de datos para ejercicio, include = FALSE}
+wine <- read.csv2('winequality-white.csv')
+wine <- data.frame(apply(wine, 2, as.numeric))
+set.seed(123)
+N <- 4897
+np <- round(0.05*N,0)
+n <- np/3
+
+###https://drinkriesling.com/tasteprofile/thescale###
+wine_sweet <- wine %>% mutate (rieseling_s= residual.sugar/(fixed.acidity+citric.acid+volatile.acidity))
+###se definen categorías, se elmina el dulce porque es un outsider (residual.sugar 65)###
+wine_sweet <- wine_sweet %>% mutate(sweet_c = 
+                                        case_when(rieseling_s < 1 ~ 'dry', 
+                                                  rieseling_s < 2.1 ~ 'medium_dry',
+                                                  rieseling_s <= 4 ~ 'medium_sweet')) %>% na.omit()
+wine_sweet$sweet_c <- as.factor(wine_sweet$sweet_c)
+
+#### se realiza el muestreo acá####
+x <- wine_sweet %>% group_by(sweet_c) %>%
+    sample_n(n, replace = FALSE)
+
+#xt <- x %>% summarise_at(.vars = names(.)[1:12],.funs = c(mean)) %>%
+    #gather(Variable, valname, -sweet_c) %>% spread(sweet_c, valname)
+
+nom_sweet <- c('Seco', 'Semi_seco', 'Semi_dulce')
+x_mean <- x %>% summarise_at(.vars = names(.)[1:12],.funs = c(mean))
+x_mean <- as.data.frame(t(x_mean[, -1]))
+colnames(x_mean) <- nom_sweet
+
+x_sd <- x %>% summarise_at(.vars = names(.)[1:12],.funs = c(sd))
+x_sd <- as.data.frame(t(x_sd[, -1]))
+colnames(x_sd) <- nom_sweet
+
+coef_var <- x_sd/x_mean
+
+table_est <- cbind(x_mean, x_sd, coef_var)
+
+##########################medias ponderadas##################################
+med_pond <- wine_sweet %>% group_by(sweet_c) %>% count() %>% 
+    mutate(N = N, proporcion_estrato = n/N) %>% as.data.frame() ###tabla medias ponderadas
+
+med_pond_1 <- med_pond[,-1]
+row.names(med_pond_1) <- nom_sweet
+
+#############################################################################
+y_1 <-med_pond %>% 
+    select(sweet_c, proporcion_estrato) %>% 
+    spread(sweet_c, proporcion_estrato) ### organizacion de tabla para merge
+
+medp_str<- x_mean %>% merge(y_1) %>% 
+    mutate(dry = dry*Seco, 
+           medium_dry = medium_dry*Semi_seco, 
+           medium_sweet = medium_sweet*Semi_dulce) %>%
+    mutate(media_estratificada = dry+medium_dry+medium_sweet) %>%
+    mutate(error = media_estratificada*0.05)
+    
+
+nom_sweet_medp <- c('Seco', 'Semi_seco', 
+                    'Semi_dulce', 'Seco', 
+                    'Semi_seco', 'Semi_dulce', 
+                    'Media estratificada',
+                    'Error')
+rownames(medp_str) <- rownames(x_mean)
+colnames(medp_str) <- nom_sweet_medp
+
+sd_ponder_val<- x_sd %>% merge(y_1) %>% cbind(medp_str)
+
+```
+
+
+```{r función poblaciones_finitas e infinitas, include=FALSE}
+inf_finite_estr <- function(N, sd_ponder_data, conf) {
+    Z <- qnorm((1-conf)/2, mean = 0, sd = 1)
+    V <- (sd_ponder_data[,14]/Z)^2
+    P_infinite <- (sd_ponder_data[,4]*sd_ponder_data[,1]^2+
+                       sd_ponder_data[,5]*sd_ponder_data[,2]^2+
+                       sd_ponder_data[,6]*sd_ponder_data[,3]^2)/V
+    P_finite <- P_infinite/(1+(P_infinite/N))
+    Seco <- round(P_finite*sd_ponder_data[,4], 0)
+    Semi_seco <- round(P_finite*sd_ponder_data[,5], 0)
+    Semi_dulce <- round(P_finite*sd_ponder_data[,6], 0)
+    n_final <- Seco+Semi_seco+Semi_dulce
+    Error <- sd_ponder_data[,14]
+    tabl_e_s <- data.frame(Error, P_infinite, P_finite, 
+                           Seco, Semi_seco, Semi_dulce, n_final)
+    rownames(tabl_e_s) <- rownames(sd_ponder_data)
+    print(tabl_e_s)
+}
+```
+
+# Actividad
+
+>El objetivo de esta actividad es hacer un diseño muestral estratificado, según lo visto en clase.
+
+* Se debe seleccionar una base, puede ser una base propia o la base de wine+quality.
+* Seleccione una única variable para hacer los niveles de estratificación.
+* Realice una prueba piloto.
+* Defina cuál debe ser el tamaño de la muestra total y de casa uno de los estratos.
+* De algunas conclusiones de los resultados.
+* Se debe subir la actividad antes del 29 de junio a las 23:59 horas.
+* Debe subirse en un archivo pdf.
+
+## Especificaciones base de datos y adecuaciones
+
+>Este conjunto de datos también está disponible en el repositorio de aprendizaje automático de [UCI (Universidad de California en Irvine)], (https://archive.ics.uci.edu/ml/datasets/wine+quality). Estos conjuntos de datos están relacionados con variantes rojas del vino portugués "Vinho Verde". Para más detalles, consulte la referencia [Cortez et al., 2009]. 
+
+>Variables de entrada (basadas en pruebas fisicoquímicas):
+
+1. fixed acidity
+2. volatile acidity
+3. citric acid
+4. residual sugar
+5. chlorides
+6. free sulfur dioxide
+7. total sulfur dioxide
+8. density
+9. pH
+10. sulphates
+11. alcohol
+12. quality (score between 0 and 10)
+
+Con el fin de realizar el análisis de muestreo estratificado por dos métodos (muestreo aleatorio estratificado y muestro estratificado de Neyman), se decide definir una cualificacion del vino elegido (para este caso eligió la base de datos de vino blaco). 
+La cualificación designada fue la escala de "dulzor del vino" para definir esto acudió a la [escala de Rieseling] (https://drinkriesling.com/tasteprofile/thescale). 
+
+Esta clasificación se define a través de la relación entre azucares residuales y ácidos del vino. Por esta razón, se decidió realizar una nueva columna en la base de datos que corresponde al *indice de Rieseling* a través de la siguiente relación:
+
+$$
+IRF\ Rieseling = \frac{residual\_sugar} {fixed\_ acidity+volatile\_ acidity+citric\_ acid}
+$$
+Posteriormente ya obtenida esta nueva columna en la base de datos se decidió realizar una asignación de categorías para los vino con relación a este indice de la siguiente manera:
+
+* IRF Rieseling $< 1.0$ = dry (seco)
+* IRF Rieseling $1.0 - 2.0$ = semi_dry (semi-seco)
+* IRF Rieseling $2.1 - 4.0$ = semi_sweet (semi-dulce)
+* IRF Rieseling $> 4.0$ = sweet (dulce)
+
+Al aplicar esta categorización se encontró que solo una observación correspondía a `sweet`, de manera que se decidió eliminar porque no aportaba al análisis. De esta forma, los vinos se categorizaron únicamente en `dry` (seco), `semi-dry` (semi-seco), `semi-sweet` (semi-dulce), estos fueron lo estratos que se definieron para este estudio. 
+
+# Muestreo aleatorio estratificado
+
+## Datos iniciales y estimadores para cada variable.
+
+El primer análisis realizado fue un muestreo aleatorio estratificado simple; en el cual se utilizó unicamente la función `sample` del paquete básico de *R*. Además se realizó el análisis para estimar los tamaños de muestra esperado para cada una de las 12 variables de la base de datos. Para todos los análisis de este metodo se definió un error estandar de 0.05 y un nivel de confianza de 0.95.
+
+Inicialmente se realizó una determinación de muestra para el estudio piloto y se definió un posible tamaño de muestra para cada uno de los estratos para la muestra piloto. Para esto se tuvo en cuenta que la categorización se realizó a partir de los 3 estratos antes comentados (ver tabla 1.)
+
+```{r tabla_piloto_total, echo=FALSE, message=FALSE}
+table1 <- data.frame(N, np, n)
+knitr::kable(table1,booktabs = F,
+             col.names = c('N', 'n piloto', 'n estratos'),
+             caption = 'Tamaños de población y muestras (piloto y estratos)', 
+             digits = 3, align = 'c') %>% kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    footnote(general = 'Para el n del piloto se utilizo un error = 0.05', 
+             escape = F)
+```
+
+La tabla 2. muestra los estimadores para la muestra piloto para cada una de las variables organizadas por estrato. 
+
+Posteriormente se decidió obtener las proporciones para cada de los muestreos para cada una de los estratos, como se muestra la tabla 3. A partir de estos datos, se encuentra que la mayor proporcion de tamaño muestral corresponde al estrato `dry` y el de menor proporción es el `semi-sweet`. Se decidió ajustar los estimadores de cada una de las variables por estrato para cada una de las variables. 
+
+## Proporciones y estimadores por estrato
+
+```{r gráfica prueba, echo=FALSE, message=FALSE, results='asis'}
+knitr::kable(table_est, booktabs = TRUE,  
+             caption = "Estimadores de la muestra piloto", 
+             digits = 3) %>%
+    kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 6) %>%
+    add_header_above(c("", "Media" = 3, 
+                       "Desviacion estandar" = 3, 
+                       "Coeficiente de variación" = 3), 
+                     escape = FALSE)
+
+```
+
+La tabla 4. muestra el ajuste de estimadores de los estimadores la proporción de cada uno de los estratos por variable, y se obtiene el valor de error estandar para cada una de las variables a partir del ajuste proporcional. 
+
+```{r gráfica prueba_def med ponderada2, echo=FALSE, results='asis'}
+knitr::kable(med_pond_1,booktabs = F,
+             caption = 'Proporciones para cada estrato', 
+             digits = 3, align = 'c') %>% kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    footnote(general = 'Proporción por estrato obtiene de n/N')
+```
+
+A partir de este valor de error se decidió realizar un analisis de estimaciones de tamaños de población para cada una de la variables de manera proporcional. Como se observa en la tabla 5. se obtuvo un tamaño de muestra para cada una población finita y una población infinita para cada una de las variables en la segunda parte de la tabla se observa el valor de n (muestra) para cada una de las variables ajustada al peso de cada uno de los estratos y el número de n (muestra) final para todas las variables. 
+
+```{r gráfica prueba med_ponderada variable, echo=FALSE, message=FALSE, results='asis'}
+knitr::kable(medp_str, booktabs = TRUE,  
+             caption = "Medias estratificadas por variable", 
+             digits = 3) %>%
+    kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    add_header_above(c("", "Media" = 3, 
+                       "Media ponderada por estrato" = 3, "", ""), 
+                     escape = FALSE)
+
+```
+
+Estos valores de n finales obtenidos para cada una de las variables, están ajustados para cada uno de los errores por variable. No se realizó análisis de margenes de errores. Sin embargo, de esta tabla se puede observar como aquellas variables que presentan valores más cercanos a la media, o más consistentes (con menor varianza) son los que menor número de muestra requieren por ejemplo `density` arroja un valor de 0 al redondearlo, lo cual es incomprensible. Sin embargo, si se observa el número en decimal se obtiene que con aproximadamente 1 solo indviduo muestreado se obtendra información sobre esta variable; esto se debe a la poca varianza y bajo error que presenta esta variable. No obstante, esto no permite realizar un análisis más profundo de las muestras por estrato. De manera que, para el siguiente punto se decidió utilizar una única variable que presentara mayor varianza `citric.acid`. 
+
+```{r  piloto inf_fin_varall, include=FALSE}
+n_var <- inf_finite_estr(4897, sd_ponder_val, 0.95)
+```
+
+
+```{r tabla_errores_varall, echo=FALSE, message=FALSE, results='asis'}
+knitr::kable(n_var, booktabs = TRUE,  
+             caption = "Tamaños de muestra definidos por error de cada variable para población finita e infinita y proporciones finales por estrato",
+             digits = 4) %>%
+    kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    add_header_above(c(" ", "", "Prueba para tipo de población" = 2, "Valor de n proporcionada por estrato" = 3, ""), 
+                     escape = FALSE) %>%
+    footnote(general = 
+                 c('P_infinite = muestra (n) total para población infinita', 
+                   'P_finite = muestra (n) total para población finita'))
+```
+
+
+# Muestreo estratificado por método de Neyman
+
+```{r análisis completo NEYMAN, include=FALSE}
+#### gráficas por grupos para la variable CITRIC-ACID ####
+data_gr <- wine_sweet %>% group_by(sweet_c) %>%
+    summarise(counts = n()) %>% arrange(desc(sweet_c)) %>%
+    mutate(prop = round(counts*100/sum(counts), 1),
+           lab.ypos = cumsum(prop) - 0.5*prop)
+
+data_mean <- wine_sweet %>% group_by(sweet_c) %>% 
+    summarise(grp.mean = mean(citric.acid))
+###########################################################
+
+density_plot <- ggplot(wine_sweet, aes(x = citric.acid)) + 
+    geom_density(aes(color = sweet_c, fill = sweet_c), alpha = 0.4) + 
+    scale_color_manual(values = c("#FC4E07", "#868686FF", "#0073C2FF" ))+
+    scale_fill_manual(values = c("#FC4E07", "#868686FF", "#0073C2FF" )) +
+    geom_vline(aes(xintercept = grp.mean, 
+                   color = sweet_c),
+               data = data_mean,
+               size = 1,
+               linetype = "dashed")
+
+boxplot_wine <- ggplot(wine_sweet, aes(x=factor(sweet_c), 
+                                       y = citric.acid, 
+                                       fill = sweet_c))+
+    geom_boxplot(alpha=0.3) + scale_y_continuous(trans = 'log2') +
+    theme(legend.position="none")
+
+
+propo_gr <- ggplot(data_gr, aes(sweet_c, prop)) +
+    geom_linerange(aes(x = sweet_c, ymin = 0, ymax = prop),
+                   color = "lightgray", size = 1.5)+
+    geom_point(aes(color = sweet_c), size = 2)+
+    ggpubr::color_palette("jco")+
+    theme_minimal()
+
+#### deteccion de outliners ####
+outliers = c()
+stats = boxplot.stats(wine_sweet[,3])$stats
+bottom_outlier_rows = which(wine_sweet[,3] < stats[1])
+top_outlier_rows = which(wine_sweet[,3] > stats[5])
+outliers = c(outliers , top_outlier_rows[ !top_outlier_rows %in% outliers ] )
+outliers = c(outliers , bottom_outlier_rows[ !bottom_outlier_rows %in% outliers ] )
+
+clean.wine_sweet <- wine_sweet[-outliers, ]
+
+data_gr.clean <- clean.wine_sweet %>% group_by(sweet_c) %>%
+    summarise(counts = n()) %>% arrange(desc(sweet_c)) %>%
+    mutate(prop = round(counts*100/sum(counts), 1),
+           lab.ypos = cumsum(prop) - 0.5*prop)
+
+boxplot_wine.clean <- ggplot(clean.wine_sweet, aes(x=factor(sweet_c), 
+                                       y = citric.acid, 
+                                       fill = sweet_c))+
+    geom_boxplot(alpha=0.3) + scale_y_continuous(trans = 'log2') +
+    theme(legend.position="none")
+
+density_plot.clean <- ggplot(clean.wine_sweet, aes(x = citric.acid)) + 
+    geom_density(aes(color = sweet_c, fill = sweet_c), alpha = 0.4) + 
+    scale_color_manual(values = c("#FC4E07", "#868686FF", "#0073C2FF" ))+
+    scale_fill_manual(values = c("#FC4E07", "#868686FF", "#0073C2FF" )) +
+    geom_vline(aes(xintercept = grp.mean, 
+                   color = sweet_c),
+               data = data_mean,
+               size = 1,
+               linetype = "dashed")
+
+propo_gr.clean <- ggplot(data_gr, aes(sweet_c, prop)) +
+    geom_linerange(aes(x = sweet_c, ymin = 0, ymax = prop),
+                   color = "lightgray", size = 1.5)+
+    geom_point(aes(color = sweet_c), size = 2)+
+    ggpubr::color_palette("jco")+
+    theme_minimal()
+
+
+####n de cada grupo####
+
+n_estrato<- clean.wine_sweet %>% group_by(sweet_c) %>% count()
+
+n_ney <- round(0.05*nrow(clean.wine_sweet),0)
+
+
+####Varibale Citric.Acid
+sd_est_n <- clean.wine_sweet %>% 
+    group_by(sweet_c) %>% 
+    summarise_at(vars(citric.acid),list(Desviacion_std = sd)) %>% 
+    merge(n_estrato)
+
+n_total_est <- sd_est_n %>%
+    mutate(n_sd = Desviacion_std*n) %>% 
+    summarise_at(vars(n_sd), sum) %>% 
+    merge(sd_est_n) %>%
+    mutate(n_total = (n_ney*n*Desviacion_std)/n_sd) 
+
+Tab_estr <- n_total_est[, 2:5]
+
+clean.wine_sweet <- clean.wine_sweet[order(clean.wine_sweet$sweet_c),]
+
+strata_data <- strata(clean.wine_sweet,stratanames = c("sweet_c"),
+                      size = c(Tab_estr[1, 4], Tab_estr[2, 4], Tab_estr[3, 4]),
+                      method = "srswor" )
+
+sampling_ac <- getdata(clean.wine_sweet$citric.acid, strata_data)
+
+
+n_strata <- sampling_ac %>% group_by(sweet_c) %>% count()
+
+mean_est_n <- sampling_ac %>% 
+    group_by(sweet_c) %>% 
+    summarise_at(vars(data),list(Media = mean, Varianza = var)) %>% 
+    merge(n_strata)
+
+
+#media estimada
+mean_est<-(1/nrow(clean.wine_sweet))*(sd_est_n[1, 3]*
+                                     mean_est_n[1, 2]+
+                                    sd_est_n[2, 3]*
+                                     mean_est_n[2, 2]+
+                                    sd_est_n[3, 3]*
+                                     mean_est_n[3, 2])
+Error_est<-0.05*(mean_est)
+
+NC<-0.95
+
+z<-qnorm((1-NC)/2, mean = 0, sd = 1)# valor de Z 
+
+V<-(Error_est/z)^2
+
+n_0<-((sd_est_n[1, 3]/nrow(clean.wine_sweet))*mean_est_n[1, 3]+
+          (sd_est_n[2, 3]/nrow(clean.wine_sweet))*mean_est_n[2, 3]+
+          (sd_est_n[3, 3]/nrow(clean.wine_sweet))*mean_est_n[3, 3])
+n_0 <- n_0*(1/V)
+
+n_inf <- n_0/(1+n_0/nrow(clean.wine_sweet))# final para la muestra
+
+est_pilot <- data.frame(Media_estimada=mean_est, N.confianza = NC, Z_value = z, 
+                        Error_estimado = Error_est, n_finita = n_0, n_infinita = n_inf)
+
+##########################################################################
+##########################################################################
+
+e_margen <- seq(0,Error_est, by=0.0002)
+
+
+V_t<-(e_margen/z)^2
+
+n_0_fin<-((sd_est_n[1, 3]/nrow(clean.wine_sweet))*mean_est_n[1, 3]+
+          (sd_est_n[2, 3]/nrow(clean.wine_sweet))*mean_est_n[2, 3]+
+          (sd_est_n[3, 3]/nrow(clean.wine_sweet))*mean_est_n[3, 3])
+
+n_0_finita <- n_0_fin*(1/V_t)
+
+n_infinita <- n_0_finita/(1+n_0_finita/nrow(clean.wine_sweet))# final para la muestra
+
+tabl_n_pop <- cbind(V_t, n_0_finita, n_infinita)
+
+tabl_n_pop <- as.data.frame(tabl_n_pop)
+
+
+
+###inserta una elemento tipo gráfica de los errores###
+dat.melt <- melt(tabl_n_pop, id.vars = "V_t")
+graph <- ggplot(dat.melt, aes(V_t, value, colour = variable)) + 
+    geom_point(size = 1) + 
+    labs(title = 
+             paste('Muestreo por variable', 'citric.acid'),
+         y = 'Tamaño de muestra', 
+         x = 'Errores', 
+         caption = "Método = muestro estratificado de Neyman") +
+    geom_line(linetype = "dashed") +
+  theme(plot.caption = element_text(hjust = 1, face = "italic"), 
+          legend.title = element_blank(), 
+          legend.position="bottom", legend.box = "horizontal")
+
+graph_citric.a  <- graph + 
+    scale_x_continuous(trans = 'log2') + 
+    scale_y_continuous(trans = 'log2')+
+    annotation_logticks(sides="lb")
+
+
+##########################################################################
+##########################################################################
+
+#### varianza estimada ####
+
+#### tabla con estimadores ####
+est_fin <- mean_est_n %>% mutate(varianza_est = Tab_estr[,3]^2*((Tab_estr[,3] - Tab_estr[,4])/Tab_estr[,3])*
+                                     (mean_est_n[,3]/Tab_estr[,4]))
+
+
+var_estima <- (1/nrow(clean.wine_sweet))*(sum(est_fin[,5]))
+
+des_stand <- sqrt(var_estima)
+
+estim_mean <- data.frame(Var_estimada = var_estima, D_std.estimada = des_stand,
+                         Int_Inf = mean_est-2*des_stand, Media_est = mean_est,
+                         Int_Sup = mean_est+2*des_stand)
+
+#### Estimación total ####
+t_media <- nrow(clean.wine_sweet)*mean_est
+t_var <- nrow(clean.wine_sweet)*var_estima
+
+total_estim <- data.frame(var_total = t_var, Int_Inf = t_media-2*sqrt(t_var), 
+                          Media_total = t_media,  
+                          Int_Sup = t_media+2*sqrt(t_media))
+
+##########################################################################
+##########################################################################
+
+```
+
+A través del análisis realizado en el punto anterior se eligió la variable `citric.acid`para conducir el muestreo por método de Neyman con una única variable. 
+
+Para iniciar el estudio de muestreo, realizó un análisis descriptivo iniciarl de la variable para cada uno de los estratos definidos (`dry`, `semi-dry`, `semi-sweet`).
+En la figura 1, se puede evidenciar las proporciones de cada uno de los estratos en la base de datos original de vino blanco [^1], esto es $N = 4897$. 
+
+[^1]: se eliminó una observación como se comentó anteriormente porque era un dato extremo para la escala de Reiseling; la cual sirvió para la estratificación realizada.
+
+## Evaluación descriptiva de la variable `citric.acid` y normalización. 
+
+```{r  proportion untidy, echo=FALSE, message=FALSE, results='asis', fig.cap='Gráfica de proporciones de los estratos en la base de datos original', fig.height=4, fig.width=5}
+propo_gr
+```
+
+Para evaluar la variable `citric.acid` en los estratos se realizaron dos graficas (figura 2 y 3), una densidad y otra un BoxPlot, respectivamente. 
+
+```{r  desity_plot untidy, echo=FALSE, message=FALSE, results='asis', fig.cap='Gráfica de densidad de la variable `citric.acid` por estrato (las lineas representan los valores de media de la variable estudiada', fig.height=4, fig.width=5}
+density_plot
+```
+
+```{r  Boxplot untidy, echo=FALSE, message=FALSE, results='asis', fig.cap='Gráfica de Boxplot de la variable `citric.acid` por estrato, de la base de datos original', fig.height=4, fig.width=5}
+boxplot_wine
+```
+
+Como se puede observaren estas figuras, en primer lugar se observa que las observaciones para los grupos, en la gráfica de densidad (figura 2) exhiben una asimetría hacia la izquierda. Lo cual puede ser dado a múltiples *outliers*. Para verificar esto, se realizó un BoxPlot (figura 3) en el cual se verifica el gran número de observaciones *outliners* (debido a los valores tan pequeños de las observaciones de la variable `citric.acid` se decidió hacer una transformación logaritmica ($log_2$))
+
+Por lo anterior se decide realizar una limpieza de *outliers*, con lo cual se eliminan **269** observaciones. Con lo cual se deja una nueva base de datos limpia de $N = 4628$. Para verificar la normalidad se realiza un nuevo análisis descriptivo. 
+
+```{r  proportion tidy, echo=FALSE, message=FALSE, results='asis', fig.cap='Gráfica de proporciones de los estratos en la base de datos sin *outliers*', fig.height=4, fig.width=5}
+propo_gr.clean
+```
+
+Se evaluan proporciones en la figura 4; observando que la eliminación de variables no impacto grandemente los estratos, ya que la proporcionalidad es similar a la base original. 
+
+
+```{r  desity_plot tidy, echo=FALSE, message=FALSE, results='asis', fig.cap='Gráfica de densidad de la variable `citric.acid` por estrato (las lineas representan los valores de media de la variable estudiada de la base de datos sin *outliers*', fig.height=4, fig.width=5}
+density_plot.clean
+```
+
+```{r  Boxplot tidy, echo=FALSE, message=FALSE, results='asis', fig.cap='Gráfica de Boxplot de la variable `citric.acid` por estrato, de la base de datos sin *outliers*', fig.height=4, fig.width=5}
+boxplot_wine.clean
+```
+
+Se realiza además una nueva gráfica de densidad (figura 5) y un BoxPlot (figura 6). Los cuales muestran normalidad en la distribución de las observaciones y una minimización de *outliers*. Esta nueva base de datos será la que se utilizará para continuar el análisis de muestreo por el método de Neyman. 
+
+Para los subsiguientes análisis se utilizó un error de 0.05 y nivel de confianza de 0.95. Incialmente se obtuvo el tamaño de la muestra piloto a partir del error definido. 
+Estos datos están resumidos en la tabla 6. 
+
+## muestra piloto y estimadores
+
+```{r tabla 2 inicial, echo=FALSE, message=FALSE, results= 'asis'}
+table2 <- data.frame(N = nrow(clean.wine_sweet), n_piloto = n_ney)
+knitr::kable(table2, booktabs = F,
+             caption = 'Tamaños de población y muestras piloto', 
+             digits = 3, align = 'c') %>% 
+  kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    footnote(general = c('Para el n del piloto se utilizo un error = 0.05'), 
+             escape = F)
+
+```
+
+La tabla 7 corresponde a los valores de n para cada uno de los estratos desde el N poblacional y el n de la prueba piloto. allí se obtiene a su vez la desviación estandar de las observaciones para la variable `citric.acid ` para cada uno de los estratos. Como se puede ver, el estrato con mayor número de observaciones es `dry` y el de menor cantidad de observaciones es `medium_sweet`. 
+
+```{r n para N y piloto, echo=FALSE, message=FALSE, results= 'asis'}
+knitr::kable(Tab_estr, booktabs = F,
+             caption = 'Tamaños de muestra por estrato para N y el piloto', 
+             col.names = c('Estrato', 'Desviacion.Std', 'n', 'n total'),
+             digits = 3, align = 'c') %>% kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    footnote(general = 'n total corresponde a la cantidad de observaciones por estrato de n de la prueba piloto', 
+             escape = F)
+```
+
+Despues de obtenidos los valores de muestra para cada estrato en la muestra piloto se procedió a aplicar la función `strata` del paquete `sampling`; para obtener las muestras de la base de datos utilizada para este ejericicio. A partir de este nuevo remuestreo se obtiene media y varianza de las observaciones resultantes para cada estrato (ver tabla 8).
+
+```{r media y var strata, echo=FALSE, message=FALSE, results= 'asis'}
+knitr::kable(mean_est_n, booktabs = F,
+             caption = 'Valores de media y varianza para el muestreo por función `strata`', 
+             col.names = c('Estrato', 'Media', 'Varianza', 'n_strata'),
+             digits = 3, align = 'c') %>% kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    footnote(general = c('n strata corresponde al tamaño de n para cada uno' , 
+                         'de los estratos obtenido a traves de la funcion',
+                         '[strata] del paquete [sampling]'), 
+             escape = F)
+```
+
+Seguidamente se obtiene los estimadores la variable `citric.acid` en la nueva muestra realizada. Además se obtienen unos estimados de muestra para población finita e infinita a apartir del remuestreo para toda la base de datos nueva de manera que haya representación de todas los estratos (tabla 9). Se obtuvo un valor de error (0.016) posible para la variable y a partir de este se definieron posibles margenes de error aceptable y se obtuvo sus valores de muestra tanto para población finita como infinita (esto se puede ver en la tabla 12 al final del documento). 
+
+```{r estimadores piloto, echo=FALSE, message=FALSE, results= 'asis'}
+knitr::kable(est_pilot, booktabs = F,
+             caption = 'Estimadores para la muestra piloto a partit de la variable `citric.acid`', 
+             digits = 3, align = 'c') %>% kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    footnote(general = c('El valor de Z se obtuvo 
+                         asumiendo normalidad (media = 0, desviación estandar = 1)'), 
+             escape = F)
+```
+
+## Tamaño de muestra para población infinita y finita
+
+Para observar mejor al relación entre los margenes de error y los valores de muestra finita e infinita, se decidió realizar gráficas para comparando los tipos de muestreo. Esto se puede ver en la figura 8. Allí se puede ver el tamaño de muestra vs el margen de error; sin embargo, dado que el valor de errores es tan grande y las diferencias entre las muetras son más diversas en cuato se acerca a 0 el error. Se decidió realizar una transformación logaritmica de los datos a través de un logaritmo en base 2 (log2). 
+
+La figura 9, muestra la relación entre los errores y las muestras para población finita e infinita para transformadas logaritmicamente. Como se puede observar la muestra infinita tiene un comportamiento uniforme, sin embargo la curva de la muestra para población finita tiene un aplanamiento cuando está próxima al tamaño de población total (N). 
+
+```{r  grap uno de errores, echo=FALSE, message=FALSE, results='asis', fig.cap= 'Gráfica de errores vs tamaños de población finita (azul) e infinita (rosado)', fig.height=4, fig.width=5}
+graph
+```
+
+De lo anterior es posible afirmar, sin tener encuenta otras variables que van más allá de este análisis (recursos, economicas, logisticas, entre otros), lo ideal es tomar el tamaño dónde se porduce la flexión de la muestra para población finita y se aleja de la infinita para este caso. Esto se puede afirmar porque el aplanamiento de la curva es sostenido lo que quiere decir que independiente que se incremente el tamaño de muestra en este punto el error seguirá siendo bajo, por lo tanto considero que el tamaño de muestra adecuado para este caso sería $n=1024$. 
+
+```{r  grap uno de errores log2, echo=FALSE, message=FALSE, results='asis',  fig.cap= 'Gráfica de errores vs tamaños de población finita (azul) e infinita (rosado) con transformación logaritmica (log2)', fig.height=4, fig.width=5}
+graph_citric.a
+```
+
+## Estimadores para finales para variable `citric.acid`y totales
+
+```{r estimadores varianza estimada, echo=FALSE, message=FALSE, results= 'asis'}
+knitr::kable(est_fin, booktabs = F,
+             caption = 'Margenes de error y tamaños de población infinita y finita', 
+             col.names = c('Estimadore', 'Media', 'Varianza', 'n', 'Varianza_est'),
+             digits = 10, align = 'c') %>% kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    footnote(general = c('Se obtiene la varianza estimada para cada uno de los estratos'), 
+             escape = F)
+```
+
+```{r estimadores finales para la variable, echo=FALSE, message=FALSE, results= 'asis'}
+knitr::kable(estim_mean, booktabs = F,
+             caption = 'Estimadores finales para la variable [citric.acid]', 
+             col.names = c('Varianza_est', 'ds_estimada', 'Intervalo_inf', 'Media_est', 'Intervalo_sup'),
+             digits = 10, align = 'c') %>% kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    footnote(general = c('sd = desviación estandar.'), 
+             escape = F)
+```
+
+Finalmente se decide realizar los estimadores finales para los estratos, estos datos pueden ser observados en la tabla 10 y 11. En la primera se puede observar la varianza estimada para cada uno de los estratos respecto a la variable `citric.acid`. En el segundo se puede observar los estimadores finales para la variable estudiada respecto a la muestra final. Estos valores de muestra final son obtenidos a través del remuestreo realizado por la función `strata`.
+
+```{r estimadores finales totales, echo=FALSE, message=FALSE, results= 'asis'}
+knitr::kable(total_estim, booktabs = F,
+             caption = 'Estimadores totales para la variable [citric.acid]', 
+             col.names = c('Varianza_total', 'Intervalo_inf', 'Media_total', 'Intervalo_sup'),
+             digits = 10, align = 'c') %>% kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 8) %>%
+    footnote(general = c('Valores totales obtenidos a través de los estimadores'), 
+             escape = F)
+```
+
+```{r errores y tamaños de poblacion, echo=FALSE, message=FALSE, results= 'asis'}
+knitr::kable(tabl_n_pop, booktabs = F,
+             caption = 'Margenes de error y tamaños de población infinita y finita', 
+             col.names = c('Margen de error', 'Muestra finita', 'muestra infinita'),
+             digits = 10, align = 'c') %>% kable_styling(latex_options = c("striped", "hold_position"),
+                full_width = FALSE, 
+                fixed_thead = TRUE,
+                font_size = 4) %>%
+    footnote(general = c('El marge de error se obtuvo por la siquiente secuencia', 
+                         'seq(0,Error est, by=0.0002)'), 
+             escape = F)
+```
